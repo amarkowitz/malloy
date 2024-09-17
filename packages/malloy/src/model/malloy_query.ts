@@ -37,6 +37,7 @@ import {
   FieldDef,
   FieldFragment,
   FieldRef,
+  FieldReferenceFragment,
   FieldTimestampDef,
   Filtered,
   FilterExpression,
@@ -81,8 +82,10 @@ import {
   ResultMetadataDef,
   ResultStructMetadataDef,
   SearchIndexResult,
+  SourceReferenceFragment,
   SpreadFragment,
   SQLExpressionFragment,
+  SqlStringFragment,
   StructDef,
   StructRef,
   TurtleDef,
@@ -134,10 +137,7 @@ class StageWriter {
   stagePrefix = '__stage';
   useCTE: boolean;
 
-  constructor(
-    useCTE = true,
-    public parent: StageWriter | undefined
-  ) {
+  constructor(useCTE = true, public parent: StageWriter | undefined) {
     this.useCTE = useCTE;
   }
 
@@ -782,6 +782,48 @@ class QueryField extends QueryNode {
     );
   }
 
+  generateFieldReference(
+    resultSet: FieldInstanceResult,
+    context: QueryStruct,
+    expr: FieldReferenceFragment,
+    state: GenerateState
+  ): string {
+    return this.generateFieldFragment(
+      resultSet,
+      context,
+      {type: 'field', path: expr.path},
+      state
+    );
+  }
+
+  generateSqlString(
+    resultSet: FieldInstanceResult,
+    context: QueryStruct,
+    expr: SqlStringFragment,
+    state: GenerateState
+  ): string {
+    return expr.e
+      .map(part =>
+        typeof part === 'string'
+          ? part
+          : this.generateExpressionFromExpr(resultSet, context, [part], state)
+      )
+      .join('');
+  }
+
+  generateSourceReference(
+    resultSet: FieldInstanceResult,
+    context: QueryStruct,
+    expr: SourceReferenceFragment,
+    state: GenerateState
+  ): string {
+    if (expr.path === undefined) {
+      return context.getSQLIdentifier();
+    } else {
+      return context.getFieldByName(expr.path).getIdentifier();
+    }
+  }
+
   getAnalyticPartitions(resultStruct: FieldInstanceResult) {
     const ret: string[] = [];
     let p = resultStruct.parent;
@@ -980,6 +1022,12 @@ class QueryField extends QueryNode {
         s += this.generateSpread(resultSet, context, expr, state);
       } else if (expr.type === 'dialect') {
         s += this.generateDialect(resultSet, context, expr, state);
+      } else if (expr.type === 'sql-string') {
+        s += this.generateSqlString(resultSet, context, expr, state);
+      } else if (expr.type === 'source-reference') {
+        s += this.generateSourceReference(resultSet, context, expr, state);
+      } else if (expr.type === 'field-reference') {
+        s += this.generateFieldReference(resultSet, context, expr, state);
       } else {
         throw new Error(
           `Internal Error: Unknown expression fragment ${JSON.stringify(
@@ -4596,19 +4644,19 @@ export class QueryModel {
               ${fieldTypeColumn},
               weight,
               CASE WHEN lower(${fieldValueColumn}) LIKE  lower(${generateSQLStringLiteral(
-                searchValue + '%'
-              )}) THEN 1 ELSE 0 END as match_first
+      searchValue + '%'
+    )}) THEN 1 ELSE 0 END as match_first
             FROM  ${await connection.manifestTemporaryTable(sqlPDT)}
             WHERE lower(${fieldValueColumn}) LIKE lower(${generateSQLStringLiteral(
-              '%' + searchValue + '%'
-            )}) ${
-              searchField !== undefined
-                ? ` AND ${fieldNameColumn} = '` + searchField + "' \n"
-                : ''
-            }
+      '%' + searchValue + '%'
+    )}) ${
+      searchField !== undefined
+        ? ` AND ${fieldNameColumn} = '` + searchField + "' \n"
+        : ''
+    }
             ORDER BY CASE WHEN lower(${fieldValueColumn}) LIKE  lower(${generateSQLStringLiteral(
-              searchValue + '%'
-            )}) THEN 1 ELSE 0 END DESC, weight DESC
+      searchValue + '%'
+    )}) THEN 1 ELSE 0 END DESC, weight DESC
             LIMIT ${limit}
           `;
     if (struct.dialect.hasFinalStage) {
